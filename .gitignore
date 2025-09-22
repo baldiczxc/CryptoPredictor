@@ -1,0 +1,8 @@
+/myenv
+/users.json
+__pycache__
+bot/__pycache__
+database/__pycache__
+utils/__pycache__
+ml/__pycache__
+
