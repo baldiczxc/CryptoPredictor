@@ -332,3 +332,146 @@ class Handlers:
         
         await state.clear()
         await self.show_interval_selection(message, symbol)
+    
+    async def get_user_favorites(self, user_id: int) -> list:
+        """Получение избранных символов пользователя"""
+        user = await self.crypto_bot.db.get_user(user_id)
+        return user.get('favorite_symbols', [])
+    
+    async def add_to_favorites(self, user_id: int, symbol: str):
+        """Добавление символа в избранное"""
+        favorites = await self.get_user_favorites(user_id)
+        if symbol not in favorites:
+            favorites.append(symbol)
+            if len(favorites) > 5:  # Ограничиваем 5 избранными
+                favorites = favorites[-5:]
+            await self.crypto_bot.db.update_user_settings(user_id, {'favorite_symbols': favorites})
+    
+    async def remove_from_favorites(self, user_id: int, symbol: str):
+        """Удаление символа из избранного"""
+        favorites = await self.get_user_favorites(user_id)
+        if symbol in favorites:
+            favorites.remove(symbol)
+            await self.crypto_bot.db.update_user_settings(user_id, {'favorite_symbols': favorites})
+    
+    async def show_user_favorites(self, message: Message, user_id: int):
+        """Показать избранные символы пользователя"""
+        favorites = await self.get_user_favorites(user_id)
+        
+        if not favorites:
+            await message.answer(
+                "⭐ У вас пока нет избранных символов.\n\n"
+                "Добавляйте символы в избранное, чтобы быстро к ним обращаться!",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_main")
+                ]])
+            )
+            return
+        
+        keyboard_buttons = []
+        for i, symbol in enumerate(favorites):
+            if i % 2 == 0:
+                keyboard_buttons.append([])
+            keyboard_buttons[-1].append(
+                InlineKeyboardButton(text=symbol, callback_data=f"symbol_{symbol}")
+            )
+        
+        keyboard_buttons.append([
+            InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_main")
+        ])
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+        
+        await message.answer(
+            "⭐ <b>Ваши избранные символы:</b>\n\n"
+            "Выберите символ для прогноза:",
+            reply_markup=keyboard,
+            parse_mode='HTML'
+        )
+    
+    async def update_user_interval(self, user_id: int, interval: str):
+        """Обновление интервала по умолчанию для пользователя"""
+        await self.crypto_bot.db.update_user_settings(user_id, {'interval': interval})
+    
+    async def toggle_user_notifications(self, user_id: int):
+        """Переключение уведомлений для пользователя"""
+        user = await self.crypto_bot.db.get_user(user_id)
+        current_state = user['settings'].get('notifications', True)
+        new_state = not current_state
+        await self.crypto_bot.db.update_user_settings(user_id, {'notifications': new_state})
+        return new_state
+    
+    async def show_settings_menu(self, message: Message, user_id: int):
+        """Показать расширенное меню настроек"""
+        user = await self.crypto_bot.db.get_user(user_id)
+        settings = user.get('settings', {})
+        
+        notifications_status = "Включены" if settings.get('notifications', True) else "Выключены"
+        interval_text = INTERVALS.get(settings.get('interval', '1H'), settings.get('interval', '1H'))
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=f"⏰ Интервал: {interval_text}", callback_data="settings_change_interval")],
+            [InlineKeyboardButton(text=f"🔔 Уведомления: {notifications_status}", callback_data="settings_toggle_notifications")],
+            [InlineKeyboardButton(text="⭐ Управление избранным", callback_data="settings_manage_favorites")],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_main")]
+        ])
+        
+        await message.edit_text(
+            "⚙️ <b>Расширенные настройки</b>\n\n"
+            "Выберите параметр для настройки:",
+            reply_markup=keyboard,
+            parse_mode='HTML'
+        )
+    
+    async def show_interval_settings(self, message: Message, user_id: int):
+        """Показать настройки интервала"""
+        user = await self.crypto_bot.db.get_user(user_id)
+        current_interval = user['settings'].get('interval', '1H')
+        
+        intervals_list = ['15m', '1H', '4H', '1D']
+        keyboard_buttons = []
+        
+        for i, interval in enumerate(intervals_list):
+            if i % 2 == 0:
+                keyboard_buttons.append([])
+            status = "✅ " if interval == current_interval else ""
+            keyboard_buttons[-1].append(
+                InlineKeyboardButton(
+                    text=f"{status}{INTERVALS.get(interval, interval)}",
+                    callback_data=f"settings_set_interval_{interval}"
+                )
+            )
+        
+        keyboard_buttons.append([
+            InlineKeyboardButton(text="🔙 Назад", callback_data="settings_main")
+        ])
+        
+        keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
+        
+        await message.edit_text(
+            "⏰ <b>Выберите интервал по умолчанию:</b>\n\n"
+            "Этот интервал будет использоваться при быстром прогнозе",
+            reply_markup=keyboard,
+            parse_mode='HTML'
+        )
+    
+    async def process_settings_callback(self, callback: CallbackQuery):
+        """Обработка callback для настроек"""
+        await callback.answer()
+        
+        if callback.data == "settings_main":
+            await self.show_settings_menu(callback.message, callback.from_user.id)
+        elif callback.data == "settings_change_interval":
+            await self.show_interval_settings(callback.message, callback.from_user.id)
+        elif callback.data.startswith("settings_set_interval_"):
+            interval = callback.data.replace("settings_set_interval_", "")
+            await self.update_user_interval(callback.from_user.id, interval)
+            await callback.answer("✅ Интервал обновлен!")
+            await self.show_settings_menu(callback.message, callback.from_user.id)
+        elif callback.data == "settings_toggle_notifications":
+            new_state = await self.toggle_user_notifications(callback.from_user.id)
+            status = "включены" if new_state else "выключены"
+            await callback.answer(f"✅ Уведомления {status}!")
+            await self.show_settings_menu(callback.message, callback.from_user.id)
+        elif callback.data == "settings_manage_favorites":
+            await self.show_user_favorites(callback.message, callback.from_user.id)
